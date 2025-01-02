@@ -1,5 +1,6 @@
 import torch
 import config
+import numpy as np
 from torch import nn
 from torch import optim
 from utils import load_checkpoint, save_checkpoint, plot_examples
@@ -12,58 +13,69 @@ from dataset import MyImageFolder
 torch.backends.cudnn.benchmark = True
 
 
+# Modified training function with improved loss weights and monitoring
 def train_fn(loader, disc, gen, opt_gen, opt_disc, mse, bce, vgg_loss):
     loop = tqdm(loader, leave=True)
-
+    gen_losses = []
+    disc_losses = []
+    
     for idx, (low_res, high_res) in enumerate(loop):
         high_res = high_res.to(config.DEVICE)
         low_res = low_res.to(config.DEVICE)
-        high_res = high_res[:, :3, :, :]  
-        low_res = low_res[:, :3, :, :]  
-
-        ### Train Discriminator: max log(D(x)) + log(1 - D(G(z)))
-        fake = gen(low_res)
-        disc_real = disc(high_res)
-        disc_fake = disc(fake.detach())
-        disc_loss_real = bce(
-            disc_real, torch.ones_like(disc_real) - 0.1 * torch.rand_like(disc_real)
-        )
-        disc_loss_fake = bce(disc_fake, torch.zeros_like(disc_fake))
-        loss_disc = disc_loss_fake + disc_loss_real
+        
+        # Train Discriminator
+        with torch.cuda.amp.autocast():
+            fake = gen(low_res)
+            disc_real = disc(high_res)
+            disc_fake = disc(fake.detach())
+            
+            # Use label smoothing
+            real_labels = torch.ones_like(disc_real) * 0.9
+            fake_labels = torch.zeros_like(disc_fake)
+            
+            disc_loss_real = bce(disc_real, real_labels)
+            disc_loss_fake = bce(disc_fake, fake_labels)
+            loss_disc = disc_loss_real + disc_loss_fake
 
         opt_disc.zero_grad()
         loss_disc.backward()
+        # Gradient clipping for discriminator
+        torch.nn.utils.clip_grad_norm_(disc.parameters(), max_norm=1.0)
         opt_disc.step()
 
-        # Train Generator: min log(1 - D(G(z))) <-> max log(D(G(z))
-        disc_fake = disc(fake)
-
-        #l2_loss = mse(fake, high_res)
-        adversarial_loss = 1e-3 * bce(disc_fake, torch.ones_like(disc_fake))
-        loss_for_vgg = 0.006 * vgg_loss(fake, high_res)
-        gen_loss = loss_for_vgg + adversarial_loss
+        # Train Generator
+        with torch.cuda.amp.autocast():
+            disc_fake = disc(fake)
+            
+            # Content loss (VGG)
+            content_loss = vgg_loss(fake, high_res) * 0.01
+            
+            # Adversarial loss
+            adversarial_loss = bce(disc_fake, torch.ones_like(disc_fake)) * 0.001
+            
+            # Pixel loss (L1)
+            pixel_loss = torch.mean(torch.abs(fake - high_res)) * 0.1
+            
+            # Total generator loss
+            gen_loss = content_loss + adversarial_loss + pixel_loss
 
         opt_gen.zero_grad()
         gen_loss.backward()
+        # Gradient clipping for generator
+        torch.nn.utils.clip_grad_norm_(gen.parameters(), max_norm=1.0)
         opt_gen.step()
-
-        disc_real_avg = disc_real.mean().item()  # Average discriminator score for real images
-        disc_fake_avg = disc_fake.mean().item()
-
-        if disc_fake_avg < 0.5:
-            winner = "Discriminator"
-        else:
-            winner = "Generator"
-
-        if idx % 50 == 0:  # Print every 50 iterations
-            print(f"Batch {idx}:")
-            print(f"  Discriminator Real Avg Score: {disc_real_avg:.4f}")
-            print(f"  Discriminator Fake Avg Score: {disc_fake_avg:.4f}")
-            print(f"  Winner: {winner}")
-
-        if idx % 200 == 0:
-            plot_examples("test_images/", gen)
         
+        # Track losses
+        gen_losses.append(gen_loss.item())
+        disc_losses.append(loss_disc.item())
+        
+        if idx % 100 == 0:
+            avg_gen_loss = sum(gen_losses[-100:]) / len(gen_losses[-100:])
+            avg_disc_loss = sum(disc_losses[-100:]) / len(disc_losses[-100:])
+            print(f"\nAverage Generator Loss: {avg_gen_loss:.4f}")
+            print(f"Average Discriminator Loss: {avg_disc_loss:.4f}")
+
+    return np.mean(gen_losses), np.mean(disc_losses)
 
 
 def main():
