@@ -28,7 +28,7 @@ def convert_jpg_to_png(input_dir, output_dir):
                 print(f"Failed to convert {img_file}: {e}")
 
 # Example usage:
-input_directory = "/wsl.localhost/Ubuntu/home/armandobean/QMIND/Generative-Photo-Reconstruction/srgan_implementation/processed_dataset/high_res"  # Path to folder with JPG images
-output_directory = "/wsl.localhost/Ubuntu/home/armandobean/QMIND/Generative-Photo-Reconstruction/srgan_implementation/saved_pngs"  # Path where PNG images will be saved
+input_directory = 'processed_dataset/high_res'  # Path to folder with JPG images
+output_directory = 'saved'  # Path where PNG images will be saved
 
 convert_jpg_to_png(input_directory, output_directory)

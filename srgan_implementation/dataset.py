@@ -1,54 +1,114 @@
 import os
-import requests
-import cv2
-import numpy as np
 from PIL import Image
+from pathlib import Path
+import shutil
 from tqdm import tqdm
 
-def create_dataset(output_dir, num_images=100):
-    """
-    Create a dataset of high-res and corresponding low-res images
-    """
-    # Create directories if they don't exist
-    high_res_dir = os.path.join(output_dir, "high_res")
-    low_res_dir = os.path.join(output_dir, "low_res")
-    os.makedirs(high_res_dir, exist_ok=True)
-    os.makedirs(low_res_dir, exist_ok=True)
-
-    def process_image(img_path, index):
-        # Read original image
-        img = Image.open(img_path).convert('RGB')
+class ImageProcessor:
+    def __init__(self, input_dir, output_base_dir):
+        self.input_dir = Path(input_dir)
+        self.output_base_dir = Path(output_base_dir)
         
-        # Create high-res version (256x256)
-        high_res = img.resize((256, 256), Image.LANCZOS)
+        # Create output directories
+        self.high_res_dir = self.output_base_dir / 'high_res'
+        self.low_res_dir = self.output_base_dir / 'low_res'
         
-        # Create low-res version (64x64)
-        low_res = img.resize((64, 64), Image.BICUBIC)
+        # Create directories if they don't exist
+        self.high_res_dir.mkdir(parents=True, exist_ok=True)
+        self.low_res_dir.mkdir(parents=True, exist_ok=True)
         
-        # Save images
-        high_res.save(os.path.join(high_res_dir, f"abacus_{index:04d}_high.png"))
-        low_res.save(os.path.join(low_res_dir, f"abacus_{index:04d}_low.png"))
+        # Set sizes
+        self.high_res_size = (256, 256)
+        self.low_res_size = (64, 64)
+        
+    def verify_input_directory(self):
+        """Verify input directory and count valid images"""
+        if not self.input_dir.exists():
+            raise Exception(f"Input directory {self.input_dir} does not exist!")
+        
+        valid_extensions = {'.jpg', '.jpeg', '.png', '.bmp'}
+        image_files = [f for f in self.input_dir.iterdir() 
+                      if f.suffix.lower() in valid_extensions]
+        
+        if not image_files:
+            raise Exception(f"No valid images found in {self.input_dir}")
+            
+        print(f"Found {len(image_files)} valid images in input directory")
+        return image_files
+    
+    def process_single_image(self, image_path, index):
+        """Process a single image and save high and low res versions"""
+        try:
+            # Open and convert to RGB
+            with Image.open(image_path) as img:
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
+                
+                # Create high-res version
+                high_res = img.resize(self.high_res_size, Image.LANCZOS)
+                high_res_path = self.high_res_dir / f"image_{index:04d}.png"
+                high_res.save(high_res_path, "PNG")
+                
+                # Create low-res version
+                low_res = img.resize(self.low_res_size, Image.LANCZOS)
+                low_res_path = self.low_res_dir / f"image_{index:04d}.png"
+                low_res.save(low_res_path, "PNG")
+                
+                print(f"Processed {image_path.name} -> {high_res_path.name}")
+                return True
+                
+        except Exception as e:
+            print(f"Error processing {image_path}: {e}")
+            return False
+    
+    def process_images(self):
+        """Process all images and verify results"""
+        try:
+            # Verify input directory
+            image_files = self.verify_input_directory()
+            
+            # Process each image
+            successful = 0
+            for idx, image_path in enumerate(tqdm(image_files)):
+                if self.process_single_image(image_path, idx):
+                    successful += 1
+            
+            # Verify output
+            high_res_count = len(list(self.high_res_dir.glob('*.png')))
+            low_res_count = len(list(self.low_res_dir.glob('*.png')))
+            
+            print("\nProcessing Summary:")
+            print(f"Total images processed: {successful}")
+            print(f"Images in high_res directory: {high_res_count}")
+            print(f"Images in low_res directory: {low_res_count}")
+            
+            if high_res_count == 0 or low_res_count == 0:
+                print("\nWARNING: Output directories are empty!")
+                print("Please check the following:")
+                print("1. Input directory contains valid images")
+                print("2. Script has write permissions to output directories")
+                print("3. Sufficient disk space is available")
+            
+        except Exception as e:
+            print(f"Error during processing: {e}")
 
-    # Process existing images in a directory
-    def process_directory(input_dir):
-        images = [f for f in os.listdir(input_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
-        for idx, img_name in enumerate(tqdm(images)):
-            img_path = os.path.join(input_dir, img_name)
-            process_image(img_path, idx)
-
-    # Apply data augmentation to expand dataset
-    def augment_image(img):
-        augmentations = [
-            lambda x: x,  # Original
-            lambda x: x.transpose(Image.FLIP_LEFT_RIGHT),  # Horizontal flip
-            lambda x: x.rotate(90),  # 90 degree rotation
-            lambda x: x.rotate(180),  # 180 degree rotation
-            lambda x: x.rotate(270),  # 270 degree rotation
-        ]
-        return [aug(img) for aug in augmentations]
+# Example usage
+def main():
+    # Get the current working directory
+    current_dir = Path.cwd()
+    print(f"Current working directory: {current_dir}")
+    
+    # Set up paths
+    input_dir = current_dir / "raw_abacus_images"
+    output_dir = current_dir / "processed_dataset"
+    
+    # Create processor
+    processor = ImageProcessor(input_dir, output_dir)
+    
+    # Process images
+    processor.process_images()
 
 if __name__ == "__main__":
-    # Example usage
-    input_dir = "raw_abacus_images"  # Directory containing your original abacus images
-    output_dir = "dataset"
-    create_dataset(output_dir)
+    main()
+
+
